@@ -339,26 +339,86 @@ class Email extends ViewableData {
 		if(!$this->parseVariables_done) {
 			$this->parseVariables_done = true;
 
-			// Parse $ variables in the base parameters
-			$data = $this->templateData();
-			
 			// Process a .SS template file
 			$fullBody = $this->body;
 			if($this->ss_template && !$isPlain) {
-				// Requery data so that updated versions of To, From, Subject, etc are included
-				$data = $this->templateData();
-				
 				$template = new SSViewer($this->ss_template);
-				
+
 				if($template->exists()) {
-					//Don't rewrite hash links, or internal links will be broken.
-					$fullBody = $template->dontRewriteHashlinks()->process($data);
+					// Don't rewrite hash links, or internal links will be broken.
+					$fullBody = $template->dontRewriteHashlinks()->process($this->templateData());
 				}
 			}
-			
+
 			// Rewrite relative URLs, but preserve internal links
 			$this->body = HTTP::absoluteURLs($fullBody, true);
 		}
+	}
+
+	/**
+	 * Add Silverstripe headers and handle $send_all_emails_to, $cc_all_emails_to, and $bcc_all_emails_to
+	 *
+	 * @return array The processed to, subject, and headers
+	 */
+	public function prepareSend() {
+		Requirements::clear();
+
+		$this->parseVariables();
+
+		if (empty($this->from)) {
+			$this->from = Email::getAdminEmail();
+		}
+
+		$this->setBounceHandlerURL($this->bounceHandlerURL);
+
+		$headers = $this->customHeaders;
+
+		$headers['X-SilverStripeBounceURL'] = $this->bounceHandlerURL;
+
+		if ($this->messageID) {
+			$headers['X-SilverStripeMessageID'] = project() . '.' . $this->messageID;
+		}
+
+		if (project()) {
+			$headers['X-SilverStripeSite'] = project();
+		}
+
+		$to = $this->to;
+		$subject = $this->subject;
+		if(self::$send_all_emails_to) {
+			$subject .= ' [addressed to ' . preg_replace('/[<>]/', '', $to)
+					. ($this->cc ? ", cc to $this->cc" : '')
+					. ($this->bcc ? ", bcc to $this->bcc" : '')
+					. ']';
+
+			$to = self::$send_all_emails_to;
+			unset($headers['Cc']);
+			unset($headers['Bcc']);
+		} else {
+			if ($this->cc) {
+				$headers['Cc'] = $this->cc;
+			}
+			if ($this->bcc) {
+				$headers['Bcc'] = $this->bcc;
+			}
+		}
+
+		if (self::$cc_all_emails_to) {
+			$headers['Cc'] = (!empty($headers['Cc']) && trim($headers['Cc']) ? "{$headers['Cc']}, " : '')
+							. self::$cc_all_emails_to;
+		}
+		if (self::$bcc_all_emails_to) {
+			$headers['Bcc'] = (!empty($headers['Bcc']) && trim($headers['Bcc']) ? "{$headers['Bcc']}, " : '')
+							. self::$bcc_all_emails_to;
+		}
+
+		Requirements::restore();
+
+		return array(
+			'to' => $to,
+			'subject' => $subject,
+			'headers' => $headers
+		);
 	}
 	
 	/**
@@ -440,56 +500,19 @@ class Email extends ViewableData {
 	 * Doesn't actually give any indication if the mail has been delivered to the recipient properly)
 	 */
 	public function send($messageID = null) {
-		Requirements::clear();
-	
-		$this->parseVariables();
+		$this->messageID = $messageID;
+		$this->extend('onBeforeSend');
 
-		if(empty($this->from)) $this->from = Email::getAdminEmail();
-
-		$this->setBounceHandlerURL( $this->bounceHandlerURL );
-
-		$headers = $this->customHeaders;
-
-		$headers['X-SilverStripeBounceURL'] = $this->bounceHandlerURL;
-
-		if($messageID) $headers['X-SilverStripeMessageID'] = project() . '.' . $messageID;
-
-		if(project()) $headers['X-SilverStripeSite'] = project();
-
-		$to = $this->to;
-		$subject = $this->subject;
-		if(self::$send_all_emails_to) {
-			$subject .= " [addressed to ".preg_replace('/[<>]/', '', $to);
-			$to = self::$send_all_emails_to;
-			if($this->cc) $subject .= ", cc to $this->cc";
-			if($this->bcc) $subject .= ", bcc to $this->bcc";
-			$subject .= ']';
-			unset($headers['Cc']);
-			unset($headers['Bcc']);
-		} else {
-			if($this->cc) $headers['Cc'] = $this->cc;
-			if($this->bcc) $headers['Bcc'] = $this->bcc;
-		}
-
-		if(self::$cc_all_emails_to) {
-			if(!empty($headers['Cc']) && trim($headers['Cc'])) {
-				$headers['Cc'] .= ', ' . self::$cc_all_emails_to;		
-			} else {
-				$headers['Cc'] = self::$cc_all_emails_to;
+		foreach ($this->extend('handleSend') as $extRet) {
+			// Return if an extension handled the send
+			if ($extRet) {
+				return $extRet;
 			}
 		}
-		
-		if(self::$bcc_all_emails_to) {
-			if(!empty($headers['Bcc']) && trim($headers['Bcc'])) {
-				$headers['Bcc'] .= ', ' . self::$bcc_all_emails_to;		
-			} else {
-				$headers['Bcc'] = self::$bcc_all_emails_to;
-			}
-		}
-		
-		Requirements::restore();
-		
-		return self::mailer()->sendHTML($to, $this->from, $subject, $this->body, $this->attachments, $headers, $this->plaintext_body);
+
+		$sendVars = $this->prepareSend();
+
+		return self::mailer()->sendHTML($sendVars['to'], $this->from, $sendVars['subject'], $this->body, $this->attachments, $sendVars['headers'], $this->plaintext_body);
 	}
 
 	/**

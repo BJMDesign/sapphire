@@ -225,7 +225,7 @@ class Mailer extends Object {
 			list($body, $headers) = $this->encodeMultipart($messageParts, "multipart/mixed");
 		// Messages without attachments do not require such treatment
 		} else if ($htmlMsgHeaders) {
-			$headers = $htmlMsgHeaders;
+			$headers = array_merge($headers, $htmlMsgHeaders);
 		}
 	}
 
