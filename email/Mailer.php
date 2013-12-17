@@ -104,8 +104,10 @@ class Mailer extends Object {
 		$headers = $this->getStandardHeaders($from, true, $base64Encoded);
 		$subject = $this->cleanSubject($subject);
 
+		$plainHeaders = $headers;
+		$plainHeaders['Content-Type'] = $this->getContentTypeHeader(false);
 		$plainPart = $this->processHeaders(
-			$headers,
+			$plainHeaders,
 			$base64Encoded
 				? chunk_split(base64_encode($plainContent), 60)
 				: wordwrap($this->QuotedPrintable_encode($plainContent), 120)
@@ -238,12 +240,16 @@ class Mailer extends Object {
 	 */
 	public function getStandardHeaders($from, $html = false, $base64 = false) {
 		return array(
-			'Content-Type' => 'text/' . ($html ? 'html' : 'plain') . '; charset="utf-8"',
+			'Content-Type' => $this->getContentTypeHeader($html),
 			'Content-Transfer-Encoding' => $base64 ? 'base64' : 'quoted-printable',
 			'From' => $from,
 			'X-Mailer' => X_MAILER,
 			'X-Priority' => 3
 		);
+	}
+
+	public function getContentTypeHeader($html = false) {
+		return 'text/' . ($html ? 'html' : 'plain') . '; charset="utf-8"';
 	}
 
 	/**
